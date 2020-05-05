@@ -1,20 +1,22 @@
 Name:		samtools
-Version:	0.1.19
-Release:	7%{?dist}
+Version:	1.9
+Release:	3%{?dist}
 Summary:	Tools for nucleotide sequence alignments in the SAM format
 
-Group:		Applications/Engineering
 License:	MIT
-URL:		http://samtools.sourceforge.net/
-Source0:	http://downloads.sourceforge.net/%{name}/%{name}-%{version}.tar.bz2
-Patch0:		samtools-0.1.14-soname.patch
-Patch1:		samtools-0.1.19-faidx_fetch_seq2.patch
-# The Rsamtools upstream is fixing issues in the samtools 0.1.19 codebase
-Patch2:		samtools-0.1.19-R-fixes.patch
-BuildRoot:	%(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
+URL:		http://www.htslib.org/
+Source0:	https://github.com/%{name}/%{name}/releases/download/%{version}/%{name}-%{version}.tar.bz2
 
-BuildRequires:	zlib-devel >= 1.2.3
+BuildRequires:	gcc
+BuildRequires:	htslib-devel
+BuildRequires:	htslib-tools
 BuildRequires:	ncurses-devel
+BuildRequires:	zlib-devel
+# It's used in make test.
+BuildRequires:	perl-interpreter
+BuildRequires:	perl(FindBin)
+BuildRequires:	perl(Getopt::Long)
+BuildRequires:	perl(lib)
 
 %description
 SAM (Sequence Alignment/Map) is a flexible generic format for storing
@@ -24,105 +26,120 @@ SAM format, including sorting, merging, indexing and generating
 alignments in a per-position format.
 
 
-%package devel
-Summary:	Header files and libraries for compiling against %{name}
-Group:		Development/Libraries
-Requires:	%{name}-libs = %{version}-%{release}
-
-%description devel
-Header files and libraries for compiling against %{name}
-
-
-%package libs
-Summary:	Libraries for applications using %{name}
-Group:		System Environment/Libraries
-
-%description libs
-Libraries for applications using %name
-
-
 %prep
 %setup -q
-%patch0 -p1 -b .soname
-%patch1 -p1 -b .seq2
-%patch2 -p1 -b .Rfixes
 
-# fix wrong interpreter
-perl -pi -e "s[/software/bin/python][%{__python}]" misc/varfilter.py
-
-# fix eol encoding
-sed -i 's/\r//' misc/export2sam.pl
+# Remove INSTALL file to suppress rpmlint warning.
+rm -f INSTALL
 
 
 %build
-make CFLAGS="%{optflags}" dylib %{?_smp_mflags}
-make CFLAGS="%{optflags} -fPIC" samtools razip %{?_smp_mflags}
-
-cd misc/
-make CFLAGS="%{optflags} -fPIC" %{?_smp_mflags}
-
-cd ../bcftools
-make CFLAGS="%{optflags} -fPIC" %{?_smp_mflags}
+%configure CFLAGS="%{optflags}" LDFLAGS="%{build_ldflags}" \
+  --prefix=%{_prefix} \
+  --with-htslib=system
+%make_build
 
 
 %install
-rm -rf %{buildroot}
-mkdir -p %{buildroot}%{_bindir}
-install -p samtools razip %{buildroot}%{_bindir}
+%make_install
 
-# header and library files
-mkdir -p %{buildroot}%{_includedir}/%{name}
-install -p -m 644 *.h %{buildroot}%{_includedir}/%{name}
-mkdir -p %{buildroot}%{_libdir}
-strip libbam.so.1
-install -p -m 755 libbam.so.1 %{buildroot}%{_libdir}
-ln -sf libbam.so.1 %{buildroot}%{_libdir}/libbam.so
+# Remove misc/varfilter.py script using Python 2,
+# as it has not been usable since 2011.
+# https://github.com/samtools/samtools/commit/2c1daf5
+rm -f %{buildroot}%{_bindir}/varfilter.py
 
-mkdir -p %{buildroot}%{_mandir}/man1/
-cp -p samtools.1 %{buildroot}%{_mandir}/man1/
-#cp -p bcftools/bcftools.1 %{buildroot}%{_mandir}/man1/
-
-cd misc/
-install -p blast2sam.pl bowtie2sam.pl export2sam.pl interpolate_sam.pl	\
-    maq2sam-long maq2sam-short md5fa md5sum-lite novo2sam.pl psl2sam.pl	\
-    sam2vcf.pl samtools.pl soap2sam.pl varfilter.py wgsim wgsim_eval.pl	\
-    zoom2sam.pl  	       		    				\
-    %{buildroot}%{_bindir}
-
-cd ../bcftools/
-install -p bcftools vcfutils.pl %{buildroot}%{_bindir}
-mv README README.bcftools
+# Replace shebang for /usr/lib/rpm/redhat/brp-mangle-shebangs check.
+for file in $(grep -l '^#!/usr/bin/env perl' %{buildroot}%{_bindir}/*); do
+  sed -i '1 s|/usr/bin/env perl|/usr/bin/perl|' "${file}"
+done
 
 
-%clean
-rm -rf %{buildroot}
+%check
+# Check if samtools is built with system htslib.
+ldd samtools | grep -E '/lib(64)?/libhts\.so\.'
 
-
-%post libs -p /sbin/ldconfig
-
-
-%postun libs -p /sbin/ldconfig
+make test
 
 
 %files
-%defattr(-,root,root,-)
-%doc AUTHORS ChangeLog.old COPYING INSTALL NEWS examples/ bcftools/README.bcftools bcftools/bcf.tex
-%{_bindir}/*
-%{_mandir}/man1/*
-
-
-%files	devel
-%defattr(-,root,root,-)
-%{_includedir}/%{name}
-%{_libdir}/libbam.so
-
-
-%files libs
-%defattr(-,root,root,-)
-%{_libdir}/libbam.so.*
+%doc AUTHORS ChangeLog.old NEWS examples/
+%license LICENSE
+# We do not use a wildcard to list bin files, because this often leads
+# to problems when the name changes or something additional is installed.
+%{_bindir}/ace2sam
+%{_bindir}/blast2sam.pl
+%{_bindir}/bowtie2sam.pl
+%{_bindir}/export2sam.pl
+%{_bindir}/interpolate_sam.pl
+%{_bindir}/maq2sam-long
+%{_bindir}/maq2sam-short
+%{_bindir}/md5fa
+%{_bindir}/md5sum-lite
+%{_bindir}/novo2sam.pl
+%{_bindir}/plot-bamstats
+%{_bindir}/psl2sam.pl
+%{_bindir}/sam2vcf.pl
+%{_bindir}/samtools
+%{_bindir}/samtools.pl
+%{_bindir}/seq_cache_populate.pl
+%{_bindir}/soap2sam.pl
+%{_bindir}/wgsim
+%{_bindir}/wgsim_eval.pl
+%{_bindir}/zoom2sam.pl
+%{_mandir}/man1/samtools.1*
+%{_mandir}/man1/wgsim.1*
 
 
 %changelog
+* Tue Mar 17 2020 Jun Aruga <jaruga@redhat.com> - 1.9-3
+- Fix the build failure adding perl(FindBin) and perl(lib) build dependencies.
+
+* Thu Jan 30 2020 Fedora Release Engineering <releng@fedoraproject.org> - 1.9-2
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_32_Mass_Rebuild
+
+* Mon Nov 04 2019 Jun Aruga <jaruga@redhat.com> - 1.9-1
+- Update to 1.9
+- Remove devel and libs sub packges, as "make dylib" was removed.
+
+* Fri Nov 01 2019 Jun Aruga <jaruga@redhat.com> - 0.1.19-20
+- Remove Python 2 dependency (rhbz#1738176).
+
+* Fri Jul 26 2019 Fedora Release Engineering <releng@fedoraproject.org> - 0.1.19-19
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_31_Mass_Rebuild
+
+* Wed Jul 10 2019 Petr Pisar <ppisar@redhat.com> - 0.1.19-18
+- varfilter.py is a Python 2 code (bug #1675976)
+
+* Sat Feb 02 2019 Fedora Release Engineering <releng@fedoraproject.org> - 0.1.19-17
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_30_Mass_Rebuild
+
+* Wed Jul 25 2018 Adam Huffman <bloch@verdurin.com> - 0.1.19-16
+- Add BR for python2
+
+* Fri Jul 20 2018 Adam Huffman <bloch@verdurin.com> - 0.1.19-15
+- Add BR for gcc
+
+* Sat Jul 14 2018 Fedora Release Engineering <releng@fedoraproject.org> - 0.1.19-14
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_29_Mass_Rebuild
+
+* Fri Feb 09 2018 Fedora Release Engineering <releng@fedoraproject.org> - 0.1.19-13
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_28_Mass_Rebuild
+
+* Thu Aug 03 2017 Fedora Release Engineering <releng@fedoraproject.org> - 0.1.19-12
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_27_Binutils_Mass_Rebuild
+
+* Thu Jul 27 2017 Fedora Release Engineering <releng@fedoraproject.org> - 0.1.19-11
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_27_Mass_Rebuild
+
+* Sat Feb 11 2017 Fedora Release Engineering <releng@fedoraproject.org> - 0.1.19-10
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_26_Mass_Rebuild
+
+* Thu Feb 04 2016 Fedora Release Engineering <releng@fedoraproject.org> - 0.1.19-9
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_24_Mass_Rebuild
+
+* Fri Jun 19 2015 Fedora Release Engineering <rel-eng@lists.fedoraproject.org> - 0.1.19-8
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_23_Mass_Rebuild
+
 * Fri May 29 2015 Tom Callaway <spot@fedoraproject.org> - 0.1.19-7
 - add fixes from Rsamtools
 
